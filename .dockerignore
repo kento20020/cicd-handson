@@ -1,0 +1,20 @@
+# docker build に送らないファイル。ビルドが速くなり、不要物がイメージに混ざらない。
+.git
+.github
+.venv
+venv
+__pycache__
+*.pyc
+*.egg-info
+.pytest_cache
+.ruff_cache
+.coverage
+coverage.xml
+htmlcov
+site
+dist
+build
+steps
+tests
+data
+*.zip

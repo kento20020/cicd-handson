@@ -1,0 +1,71 @@
+# =============================================================================
+# pyproject.toml : Python プロジェクトの「設計図」
+# CI（GitHub Actions）はこのファイルを見て、依存関係のインストールや
+# ruff / pytest の設定を読み込みます。ローカルと CI で同じ設定になるのがポイントです。
+# =============================================================================
+
+[build-system]
+# パッケージをビルドする道具（ビルドバックエンド）として hatchling を使う。
+# 2026年10月時点の最新は 1.32.x。">=1.32" で「それ以上」を要求する。
+requires = ["hatchling>=1.32"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sales-report"
+version = "0.1.0"
+description = "小さなカフェの売上CSVからHTMLレポートを作る、CI/CD学習用のミニアプリ"
+requires-python = ">=3.12"
+# 実行時の依存は「なし」（標準ライブラリだけ）。
+# だから CI の pip install が速く、学習の邪魔になる外部要因も減ります。
+dependencies = []
+
+[project.optional-dependencies]
+# 開発用ツール（テスト・Lint）は "dev" というグループにまとめる。
+# インストール: pip install -e ".[dev]"
+#
+# ★ バージョンを「==」で固定している理由（再現性）
+#   固定しないと、ある朝突然 ruff が新しいルールを追加して CI が赤くなる、
+#   というように「コードを変えていないのに結果が変わる」ことが起きます。
+#   固定しておけば、今日のCIも半年後のCIも同じ道具で動きます。
+#   更新は Dependabot（steps/dependabot.yml）が PR で提案してくれるので、
+#   「勝手に変わる」のではなく「レビューして上げる」運用にできます。
+dev = [
+    "pytest==9.1.1",
+    "pytest-cov==7.1.0",
+    "ruff==0.17.2",
+]
+
+[project.scripts]
+# インストールすると `sales-report` コマンドが使えるようになる。
+# 中身は sales_report/cli.py の main() 関数。
+sales-report = "sales_report.cli:main"
+
+[tool.hatch.build.targets.wheel]
+# src レイアウト: 実際のコードは src/sales_report/ にある、と hatchling に教える。
+packages = ["src/sales_report"]
+
+# -----------------------------------------------------------------------------
+# ruff : Lint（コードの書き方チェック）と format（整形）を1つでこなす高速ツール
+# -----------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+# E: pycodestyle(エラー) / F: pyflakes(未使用import等) / I: import順 / B: bugbear(バグの種) / UP: 古い書き方の更新
+select = ["E", "F", "I", "B", "UP"]
+
+# -----------------------------------------------------------------------------
+# pytest
+# -----------------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# -ra : テスト結果の末尾に「失敗/スキップ等の理由」を一覧表示する
+addopts = "-ra"
+
+# -----------------------------------------------------------------------------
+# coverage : テストがコードのどこまで通ったか（カバレッジ）の計測設定
+# -----------------------------------------------------------------------------
+[tool.coverage.run]
+source = ["sales_report"]
+branch = true

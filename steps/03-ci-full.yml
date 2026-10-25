@@ -1,0 +1,156 @@
+# =============================================================================
+# Step 3 : 実務で使える形の CI（Lint + 複数バージョンのテスト + 集約ジョブ）
+# -----------------------------------------------------------------------------
+# コピー先 : .github/workflows/ci.yml   （Step 1 のファイルを「上書き」する）
+#
+#   cp steps/03-ci-full.yml .github/workflows/ci.yml
+#
+# Step 1 からの変更点:
+#   - トリガーを整理（main への push / PR / 手動実行）
+#   - 権限を最小化（permissions）、古い実行の自動キャンセル（concurrency）
+#   - lint ジョブを追加（ruff）
+#   - test ジョブを Python 3 バージョンの matrix にし、pip キャッシュとカバレッジを追加
+#   - ci-ok ジョブを追加（Step 4 で「必須チェック」として登録するのはこれ1つ）
+# =============================================================================
+
+name: CI
+
+on:
+  # main への push だけを対象にする。
+  # Step 1 の「全ブランチ push + PR」だと、PR 中は同じテストが2回走っていた。
+  # 作業ブランチは PR を出せば pull_request で検証されるので、push 側は main だけで十分。
+  push:
+    branches: [main]
+  pull_request:
+  # workflow_dispatch : Actions タブの「Run workflow」ボタンから手動で実行できる。
+  workflow_dispatch:
+
+# --- 権限の最小化 -------------------------------------------------------------
+# ジョブが使う GITHUB_TOKEN の権限。ここで「コードを読むだけ」に絞る。
+# もしワークフローやライブラリが乗っ取られても、書き込みはできない（被害を小さくする）。
+permissions:
+  contents: read
+
+# --- 同時実行の制御 -----------------------------------------------------------
+# 同じ ref（ブランチや PR）で新しい実行が始まったら、古い実行をキャンセルする。
+# 連続で push したときに、不要な古いテストで時間（=無料枠）を使わないための設定。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # lint : コードの書き方チェック（ruff）。テストより速いので、先に結果が分かる。
+  # ---------------------------------------------------------------------------
+  lint:
+    runs-on: ubuntu-latest
+    # ハングしたときに無限に動き続けないよう、上限を決める（既定は 360 分もある）。
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          # pip のダウンロードキャッシュを保存・復元する。2回目以降の pip install が速くなる。
+          cache: pip
+          # キャッシュの鍵に使うファイル。pyproject.toml が変わる(=依存が変わる)と作り直される。
+          # 既定では requirements.txt を探すが、このプロジェクトには無いので明示が必要。
+          cache-dependency-path: pyproject.toml
+
+      - name: 依存関係をインストールする
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      # Lint : 未使用の import や、バグになりやすい書き方を検出する。
+      # エラーが出ると、どのルール(例: F401)でどの行か、修正案つきでログに表示される。
+      # 発展: `ruff check --output-format=github .` にすると、PR の Files changed タブの
+      #       該当行に赤いアノテーションが付く（ログは簡素になる）。
+      - name: ruff check（Lint）
+        run: ruff check .
+
+      # format --check : 整形されていないファイルがあれば失敗にする（ファイルは書き換えない）。
+      # 手元で直すときは `ruff format .` を実行する。
+      - name: ruff format --check（整形チェック）
+        run: ruff format --check .
+
+  # ---------------------------------------------------------------------------
+  # test : pytest を Python 3 バージョンで並列に実行する
+  # ---------------------------------------------------------------------------
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      # fail-fast: false = どれか1つのバージョンが失敗しても、残りを最後まで実行する。
+      # （既定の true だと他をキャンセルしてしまい、「3.13 だけ落ちたのか全部か」が分からない）
+      fail-fast: false
+      matrix:
+        # setup-python が ubuntu-latest(24.04) で入れられる最新の安定版 3 つ(2026年10月時点)。
+        # 必ず文字列で書く（3.10 の事故防止）。
+        python-version: ["3.13", "3.14", "3.15"]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          # matrix の値が入る。3 つの仮想マシンが同時に別々のバージョンで動く。
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: 依存関係をインストールする
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      # --cov                  : カバレッジ(テストがコードのどこまで通ったか)を計測
+      # --cov-report=term-missing : 通っていない行番号をログに表示
+      # --cov-report=xml       : coverage.xml を出力（次のステップで保存する）
+      # --cov-fail-under=80    : カバレッジが 80% 未満なら失敗にする（品質の下限ライン）
+      - name: pytest（カバレッジ付き）
+        run: pytest --cov --cov-report=term-missing --cov-report=xml --cov-fail-under=80
+
+      # 成果物(artifact)として coverage.xml を保存する。Actions の実行結果ページからダウンロードできる。
+      # テストが失敗しても残したいので if: always() を付けてもよい（ここでは成功時のみ）。
+      - name: coverage.xml を保存する
+        uses: actions/upload-artifact@v7
+        with:
+          # artifact 名は 1 回の実行内で一意にする必要がある。matrix の値を入れて衝突を避ける。
+          name: coverage-${{ matrix.python-version }}
+          path: coverage.xml
+          # 保存期間（日）。既定は 90 日。学習用なので短くして保存容量(無料枠)を節約する。
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # ci-ok : 「CI 全体が OK か」を 1 つにまとめる集約ジョブ
+  # ---------------------------------------------------------------------------
+  # Step 4 で、ブランチ保護（Ruleset）の「必須ステータスチェック」に登録するのは
+  # この `ci-ok` だけ。lint や test (3.13) などを個別に登録しない理由:
+  #   - matrix を増減(3.15 を外す等)するたびに、保護設定を直しに行く必要が出てしまう
+  #   - ジョブ名を変えると、必須チェックが「永遠に待機中」になってマージできなくなる
+  #
+  # なぜ `if: always()` が必要か（重要）:
+  #   needs で指定したジョブが失敗すると、このジョブは「実行されずスキップ」される。
+  #   そして GitHub では、スキップされたジョブは「成功」と同じ扱いになり、
+  #   必須チェックにしていても PR をマージできてしまう。
+  #   つまり lint が赤なのに ci-ok がスキップで緑 → すり抜け、という事故になる。
+  #   `if: always()` を付けると、needs が失敗していても必ず実行される。
+  #   その上で、中身で自分から失敗(exit 1)させることで、正しく赤にできる。
+  ci-ok:
+    if: always()
+    needs: [lint, test]
+    runs-on: ubuntu-latest
+    steps:
+      # needs.*.result は、needs に書いた全ジョブの結果の一覧
+      # （success / failure / cancelled / skipped）。
+      # 失敗かキャンセルが1つでも含まれていたら、このステップを実行して exit 1 で落とす。
+      - name: 失敗・キャンセルがあれば CI 全体を失敗にする
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: |
+          echo "::error::lint または test が失敗、もしくはキャンセルされました"
+          exit 1
+
+      # 上のステップが実行されて失敗した場合、このステップは実行されない（既定は success() 条件）。
+      - name: すべて成功
+        run: echo "lint と test がすべて成功しました"

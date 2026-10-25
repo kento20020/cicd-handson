@@ -1,0 +1,50 @@
+# =============================================================================
+# Dependabot : 依存関係の更新を、PR で自動提案してくれる仕組み
+# -----------------------------------------------------------------------------
+# コピー先 : .github/dependabot.yml   （.github/workflows/ の中ではない点に注意）
+#
+#   mkdir -p .github
+#   cp steps/dependabot.yml .github/dependabot.yml
+#
+# 何が嬉しいか:
+#   - uses: actions/checkout@v7 のような「アクションの版」を、新しい版が出たら PR で知らせてくれる
+#   - pyproject.toml で ==固定 している pytest / ruff なども、PR で更新を提案してくれる
+#   PR には CI（ci-ok）が走るので、「上げても壊れないか」を確認してからマージできる。
+#   固定(==) と Dependabot はセットで使うと、再現性と鮮度を両立できる。
+# =============================================================================
+
+version: 2
+
+updates:
+  # --- GitHub Actions のバージョン更新 --------------------------------------
+  - package-ecosystem: "github-actions"
+    # .github/workflows/ を見に行く場合も、ここは "/" と書く（Dependabot の決まり）。
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      # 時刻とタイムゾーン。省略すると UTC のランダムな時刻になる。
+      time: "09:00"
+      timezone: "Asia/Tokyo"
+    # 同時に開いておく PR の上限。溜まりすぎて放置される事態を防ぐ。
+    open-pull-requests-limit: 5
+    groups:
+      # minor と patch の更新を 1 本の PR にまとめる（major は個別 PR にして慎重にレビュー）。
+      # グループ名は英字で始まり英字で終わる必要がある。
+      actions-minor-and-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # --- Python パッケージ(pyproject.toml)のバージョン更新 ---------------------
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Tokyo"
+    open-pull-requests-limit: 5
+    groups:
+      python-minor-and-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]

@@ -1,0 +1,141 @@
+# =============================================================================
+# Step 5 : GitHub Pages へ自動デプロイ（CD）
+# -----------------------------------------------------------------------------
+# コピー先 : .github/workflows/deploy.yml   （ci.yml とは別ファイル）
+#
+#   cp steps/05-deploy-pages.yml .github/workflows/deploy.yml
+#
+# このワークフローは main に push されるたびに、
+#   テスト → レポート(HTML)を生成 → GitHub Pages に公開
+# までを自動で行う。公開されたページ下部の「commit xxxxxxx」が、
+# 公開された内容が「どのコミットのものか」を教えてくれる。
+#
+# ★ 先にリポジトリ側で 1 回だけ設定が必要（コードでは設定できない）:
+#   リポジトリの Settings → Pages → "Build and deployment" の "Source" を
+#   「GitHub Actions」にする。
+#   これを忘れると、build ジョブの configure-pages ステップが
+#   "Get Pages site failed. Please verify that the repository has Pages enabled ..."
+#   というエラーで止まる。
+#
+# ★ 無料プラン(GitHub Free)で Pages を使うには、リポジトリが「公開(Public)」である必要がある。
+#   また Pages のサイトは、リポジトリが非公開でもインターネットに公開される点に注意。
+#   データ(data/sales.csv)は架空のサンプルなので問題ないが、実データを載せてはいけない。
+# =============================================================================
+
+name: Deploy to GitHub Pages
+
+on:
+  # main に push されたら（= PR をマージしたら）デプロイする。
+  push:
+    branches: [main]
+  # Actions タブから手動実行も可能にする（再デプロイしたいときに便利）。
+  # 注意: github-pages 環境は既定で main からのデプロイしか許可しない。
+  workflow_dispatch:
+
+# --- 権限 ---------------------------------------------------------------------
+# contents: read  : コードを読む
+# pages: write    : Pages へのデプロイを実行する(GITHUB_TOKEN に与える権限)
+# id-token: write : デプロイ元が正規のワークフローであることを証明する OIDC トークンを発行する
+#
+# 公式テンプレートに合わせてワークフロー全体に付けている。
+# より厳密にするなら pages / id-token は deploy ジョブだけに付けるのがよい
+# （ただし configure-pages も Pages の情報を読むので、build 側にも権限が要る点に注意）。
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# --- 同時実行の制御 -----------------------------------------------------------
+# 同時に 2 つのデプロイを走らせない。グループ名は "pages"（慣例）。
+# cancel-in-progress: false = 実行中のデプロイは途中でキャンセルしない。
+#   デプロイを中途半端に止めると、公開内容が壊れる可能性があるため。
+#   （待機中のものは、最新の 1 件だけが残る）
+# CI(ci.yml) は逆に true だった。「検証」は捨てても安全、「公開」は止めると危険、という違い。
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # test : 門番。壊れたものを公開しないために、デプロイの前に必ずテストする。
+  # ---------------------------------------------------------------------------
+  # ci.yml のテストと内容が重複しているが、学習用に deploy.yml だけで完結させている。
+  # 実務では「再利用可能ワークフロー(workflow_call)」で共通化することが多い。
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: 依存関係をインストールする
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      # テストが落ちたら、ここでワークフローが止まり、build / deploy は実行されない。
+      - name: テストを実行する（失敗したら公開しない）
+        run: pytest
+
+  # ---------------------------------------------------------------------------
+  # build : HTML を生成して、Pages 用の成果物(artifact)にする
+  # ---------------------------------------------------------------------------
+  build:
+    # test が成功したときだけ実行する。
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+
+      # 実行に必要なものだけ入れる（開発用ツールの [dev] は不要）。
+      - name: アプリをインストールする
+        run: |
+          python -m pip install --upgrade pip
+          pip install .
+
+      # レポートを生成する。
+      # GITHUB_SHA（このコミットのハッシュ）は GitHub Actions が自動で環境変数に入れてくれる。
+      # アプリはその先頭 7 文字を、ページのフッターに表示する。
+      - name: レポート(HTML)を生成する
+        run: python -m sales_report --input data/sales.csv --output site/index.html
+
+      # Pages の設定情報を取得する。静的な HTML では必須ではないが、
+      # Pages が有効でない(Source が GitHub Actions でない)ときに、
+      # デプロイの直前ではなくここで分かりやすいエラーにしてくれる。
+      - name: Pages を設定する
+        uses: actions/configure-pages@v6
+
+      # site/ フォルダの中身を Pages 用の成果物としてアップロードする。
+      # （名前は自動で "github-pages" になり、次の deploy-pages がそれを受け取る）
+      - name: 成果物をアップロードする
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+
+  # ---------------------------------------------------------------------------
+  # deploy : 実際に公開する
+  # ---------------------------------------------------------------------------
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    # environment : デプロイ先の「環境」。github-pages は Pages 用の特別な名前。
+    # Settings → Environments に表示され、「いつ・誰が・どのコミットを」デプロイしたかの履歴が残る。
+    # url には、デプロイ後のページ URL が入り、Actions の実行結果ページにリンクとして表示される。
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      # id: deployment を付けているので、上の url で steps.deployment.outputs.page_url と参照できる。
+      - name: GitHub Pages にデプロイする
+        id: deployment
+        uses: actions/deploy-pages@v5
