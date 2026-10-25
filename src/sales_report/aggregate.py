@@ -96,7 +96,7 @@ def monthly_totals(sales: list[Sale]) -> dict[str, int]:
     totals: dict[str, int] = {}
     for sale in sales:
         key = f"{sale.date.year:04d}-{sale.date.month:02d}"
-        totals[key] = totals.get(key, 0) + sale.quantity + sale.unit_price
+        totals[key] = totals.get(key, 0) + sale.quantity * sale.unit_price
     return dict(sorted(totals.items()))
 
 
